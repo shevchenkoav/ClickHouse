@@ -41,6 +41,18 @@ struct RowSourcePart
         data = flag ? data | MASK_FLAG : data & ~MASK_FLAG;
     }
 
+    void read(ReadBuffer & in)
+    {
+        char ch;
+        readChar(ch, in);
+        data = ch;
+    }
+
+    void write(WriteBuffer & out) const
+    {
+        writeChar(data, out);
+    }
+
     static constexpr size_t MAX_PARTS = 0x7F;
     static constexpr UInt8 MASK_NUMBER = 0x7F;
     static constexpr UInt8 MASK_FLAG = 0x80;
@@ -59,8 +71,10 @@ using MergedRowSources = PODArray<RowSourcePart>;
 class ColumnGathererStream : public IProfilingBlockInputStream
 {
 public:
-    ColumnGathererStream(const BlockInputStreams & source_streams, const String & column_name_,
-                         const MergedRowSources & row_source_, size_t block_preferred_size_ = DEFAULT_MERGE_BLOCK_SIZE);
+    ColumnGathererStream(
+            const BlockInputStreams & source_streams, const String & column_name_,
+            size_t total_rows_, ReadBuffer & row_sources_buf_,
+            size_t block_preferred_size_ = DEFAULT_MERGE_BLOCK_SIZE);
 
     String getName() const override { return "ColumnGatherer"; }
 
@@ -74,7 +88,8 @@ private:
 
     String name;
     ColumnWithTypeAndName column;
-    const MergedRowSources & row_source;
+    size_t total_rows;
+    ReadBuffer & row_sources_buf;
 
     /// Cache required fileds
     struct Source

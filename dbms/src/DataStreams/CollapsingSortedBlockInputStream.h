@@ -23,10 +23,12 @@ namespace DB
 class CollapsingSortedBlockInputStream : public MergingSortedBlockInputStream
 {
 public:
-    CollapsingSortedBlockInputStream(BlockInputStreams inputs_, const SortDescription & description_,
-        const String & sign_column_, size_t max_block_size_, MergedRowSources * out_row_sources_ = nullptr)
-        : MergingSortedBlockInputStream(inputs_, description_, max_block_size_, 0, out_row_sources_),
-        sign_column(sign_column_)
+    CollapsingSortedBlockInputStream(
+            BlockInputStreams inputs_, const SortDescription & description_,
+            const String & sign_column_, size_t max_block_size_,
+            WriteBuffer * out_row_sources_buf_ = nullptr)
+        : MergingSortedBlockInputStream(inputs_, description_, max_block_size_, 0, out_row_sources_buf_)
+        , sign_column(sign_column_)
     {
     }
 
@@ -82,6 +84,7 @@ private:
     size_t first_negative_pos = 0;    /// Global row number of first_negative
     size_t last_positive_pos = 0;    /// Global row number of last_positive
     size_t last_negative_pos = 0;    /// Global row number of last_negative
+    MergedRowSources * out_row_sources = nullptr; // TODO: remove dummy!
 
     /** We support two different cursors - with Collation and without.
      *  Templates are used instead of polymorphic SortCursors and calls to virtual functions.

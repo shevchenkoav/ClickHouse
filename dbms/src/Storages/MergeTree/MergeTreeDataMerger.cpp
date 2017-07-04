@@ -242,7 +242,7 @@ bool MergeTreeDataMerger::selectAllPartsToMergeWithinPartition(
 
     while (it != parts.end())
     {
-        if ((it != parts.begin() || parts.size() == 1)    /// For the case of one part, we check that it can be measured "with itself".
+        if ((it != parts.begin() || parts.size() == 1)    /// For the case of one part, we check that it can be merged "with itself".
             && !can_merge(*prev_it, *it))
             return false;
 
@@ -516,19 +516,23 @@ MergeTreeData::MutableDataPartPtr MergeTreeDataMerger::mergePartsToTemporaryPart
 
     size_t sum_input_rows_upper_bound = merge_entry->total_size_marks * data.index_granularity;
 
-    MergedRowSources merged_rows_sources;
-    MergedRowSources * merged_rows_sources_ptr = &merged_rows_sources;
-    MergeAlgorithm merge_alg = chooseMergeAlgorithm(data, parts, sum_input_rows_upper_bound, gathering_columns, merged_rows_sources, deduplicate);
+    MergeAlgorithm merge_alg = chooseMergeAlgorithm(data, parts, sum_input_rows_upper_bound, gathering_columns, deduplicate);
 
     LOG_DEBUG(log, "Selected MergeAlgorithm: " << ((merge_alg == MergeAlgorithm::Vertical) ? "Vertical" : "Horizontal"));
 
+    std::unique_ptr<WriteBuffer> merged_rows_sources_buf;
+
     if (merge_alg != MergeAlgorithm::Vertical)
     {
-        merged_rows_sources_ptr = nullptr;
         merging_columns = all_columns;
         merging_column_names = all_column_names;
         gathering_columns.clear();
         gathering_column_names.clear();
+    }
+    else
+    {
+        Poco::File(new_part_tmp_path).createDirectories();
+        merged_rows_sources_buf = std::make_unique<WriteBufferFromFile>(new_part_tmp_path + "rows_sources", DBMS_DEFAULT_BUFFER_SIZE);
     }
 
     ColumnSizeEstimator column_sizes(merged_column_to_size, merging_column_names, gathering_column_names);
@@ -564,12 +568,12 @@ MergeTreeData::MutableDataPartPtr MergeTreeDataMerger::mergePartsToTemporaryPart
     {
         case MergeTreeData::MergingParams::Ordinary:
             merged_stream = std::make_unique<MergingSortedBlockInputStream>(
-                src_streams, sort_desc, DEFAULT_MERGE_BLOCK_SIZE, 0, merged_rows_sources_ptr, true);
+                    src_streams, sort_desc, DEFAULT_MERGE_BLOCK_SIZE, 0, merged_rows_sources_buf.get(), true);
             break;
 
         case MergeTreeData::MergingParams::Collapsing:
-            merged_stream = std::make_unique<CollapsingSortedBlockInputStream>(
-                src_streams, sort_desc, data.merging_params.sign_column, DEFAULT_MERGE_BLOCK_SIZE, merged_rows_sources_ptr);
+            // merged_stream = std::make_unique<CollapsingSortedBlockInputStream>(
+            //         src_streams, sort_desc, data.merging_params.sign_column, DEFAULT_MERGE_BLOCK_SIZE, std::move(merged_rows_sources_buf));
             break;
 
         case MergeTreeData::MergingParams::Summing:
@@ -658,6 +662,11 @@ MergeTreeData::MutableDataPartPtr MergeTreeDataMerger::mergePartsToTemporaryPart
 
         auto it_name_and_type = gathering_columns.cbegin();
 
+        merged_rows_sources_buf->next();
+        size_t total_rows = merged_rows_sources_buf->count();
+        merged_rows_sources_buf.reset();
+        ReadBufferFromFile rows_sources_buf(new_data_part->getFullPath() + "rows_sources");
+
         for (size_t column_num = 0, gathering_column_names_size = gathering_column_names.size();
             column_num < gathering_column_names_size;
             ++column_num, ++it_name_and_type)
@@ -681,7 +690,8 @@ MergeTreeData::MutableDataPartPtr MergeTreeDataMerger::mergePartsToTemporaryPart
                 column_part_streams[part_num] = std::move(column_part_stream);
             }
 
-            ColumnGathererStream column_gathered_stream(column_part_streams, column_name, merged_rows_sources, DEFAULT_BLOCK_SIZE);
+            rows_sources_buf.seek(0);
+            ColumnGathererStream column_gathered_stream(column_part_streams, column_name, total_rows, rows_sources_buf, DEFAULT_BLOCK_SIZE);
             MergedColumnOnlyOutputStream column_to(data, new_part_tmp_path, false, compression_method, offset_written);
             size_t column_elems_written = 0;
 
@@ -746,12 +756,14 @@ MergeTreeData::MutableDataPartPtr MergeTreeDataMerger::mergePartsToTemporaryPart
 
 MergeTreeDataMerger::MergeAlgorithm MergeTreeDataMerger::chooseMergeAlgorithm(
     const MergeTreeData & data, const MergeTreeData::DataPartsVector & parts, size_t sum_rows_upper_bound,
-    const NamesAndTypesList & gathering_columns, MergedRowSources & rows_sources_to_alloc, bool deduplicate) const
+    const NamesAndTypesList & gathering_columns, bool deduplicate) const
 {
     if (deduplicate)
         return MergeAlgorithm::Horizontal;
     if (data.context.getMergeTreeSettings().enable_vertical_merge_algorithm == 0)
         return MergeAlgorithm::Horizontal;
+
+    return MergeAlgorithm::Vertical; // TODO: remove
 
     bool is_supported_storage =
         data.merging_params.mode == MergeTreeData::MergingParams::Ordinary ||
@@ -765,19 +777,6 @@ MergeTreeDataMerger::MergeAlgorithm MergeTreeDataMerger::chooseMergeAlgorithm(
 
     auto merge_alg = (is_supported_storage && enough_total_rows && enough_ordinary_cols && no_parts_overflow) ?
                         MergeAlgorithm::Vertical : MergeAlgorithm::Horizontal;
-
-    if (merge_alg == MergeAlgorithm::Vertical)
-    {
-        try
-        {
-            rows_sources_to_alloc.reserve(sum_rows_upper_bound);
-        }
-        catch (...)
-        {
-            /// Not enough memory for VERTICAL merge algorithm, make sense for very large tables
-            merge_alg = MergeAlgorithm::Horizontal;
-        }
-    }
 
     return merge_alg;
 }

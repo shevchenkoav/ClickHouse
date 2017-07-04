@@ -11,13 +11,16 @@ namespace ErrorCodes
     extern const int LOGICAL_ERROR;
     extern const int INCOMPATIBLE_COLUMNS;
     extern const int INCORRECT_NUMBER_OF_COLUMNS;
+    extern const int NOT_FOUND_COLUMN_IN_BLOCK;
     extern const int EMPTY_DATA_PASSED;
     extern const int RECEIVED_EMPTY_DATA;
 }
 
-ColumnGathererStream::ColumnGathererStream(const BlockInputStreams & source_streams, const String & column_name_,
-                                           const MergedRowSources & row_source_, size_t block_preferred_size_)
-    : name(column_name_), row_source(row_source_), block_preferred_size(block_preferred_size_), log(&Logger::get("ColumnGathererStream"))
+ColumnGathererStream::ColumnGathererStream(
+        const BlockInputStreams & source_streams, const String & column_name_,
+        size_t total_rows_, ReadBuffer & row_sources_buf_, size_t block_preferred_size_)
+    : name(column_name_), total_rows(total_rows_), row_sources_buf(row_sources_buf_)
+    , block_preferred_size(block_preferred_size_), log(&Logger::get("ColumnGathererStream"))
 {
     if (source_streams.empty())
         throw Exception("There are no streams to gather", ErrorCodes::EMPTY_DATA_PASSED);
@@ -49,8 +52,14 @@ void ColumnGathererStream::init()
         Block & block = sources.back().block;
 
         /// Sometimes MergeTreeReader injects additional column with partitioning key
-        if (block.columns() > 2 || !block.has(name))
-            throw Exception("Block should have 1 or 2 columns and contain column with requested name", ErrorCodes::INCORRECT_NUMBER_OF_COLUMNS);
+        if (block.columns() > 2)
+            throw Exception(
+                    "Block should have 1 or 2 columns, but contains " + toString(block.columns()),
+                    ErrorCodes::INCORRECT_NUMBER_OF_COLUMNS);
+        if (!block.has(name))
+            throw Exception(
+                    "Not found column `" + name + "' in block.",
+                    ErrorCodes::NOT_FOUND_COLUMN_IN_BLOCK);
 
         if (i == 0)
         {
@@ -68,29 +77,30 @@ void ColumnGathererStream::init()
 Block ColumnGathererStream::readImpl()
 {
     /// Special case: single source and there are no skipped rows
-    if (children.size() == 1 && row_source.size() == 0)
+    if (children.size() == 1 && total_rows == 0)
         return children[0]->read();
 
     /// Initialize first source blocks
     if (sources.empty())
         init();
 
-    if (pos_global_start >= row_source.size())
+    if (pos_global_start >= total_rows)
         return Block();
 
     Block block_res{column.cloneEmpty()};
     IColumn & column_res = *block_res.getByPosition(0).column;
 
-    size_t global_size = row_source.size();
-    size_t curr_block_preferred_size = std::min(global_size - pos_global_start,  block_preferred_size);
+    size_t curr_block_preferred_size = std::min(total_rows - pos_global_start,  block_preferred_size);
     column_res.reserve(curr_block_preferred_size);
 
     size_t pos_global = pos_global_start;
-    while (pos_global < global_size && column_res.size() < curr_block_preferred_size)
+    while (pos_global < total_rows && column_res.size() < curr_block_preferred_size)
     {
-        auto source_data = row_source[pos_global].getData();
-        bool source_skip = row_source[pos_global].getSkipFlag();
-        auto source_num = row_source[pos_global].getSourceNum();
+        RowSourcePart row_source;
+        row_source.read(row_sources_buf);
+        UInt8 source_data = row_source.getData();
+        bool source_skip = row_source.getSkipFlag();
+        size_t source_num = row_source.getSourceNum();
         Source & source = sources[source_num];
 
         if (source.pos >= source.size) /// Fetch new block from source_num part
@@ -100,8 +110,16 @@ Block ColumnGathererStream::readImpl()
 
         /// Consecutive optimization. TODO: precompute lens
         size_t len = 1;
-        size_t max_len = std::min(global_size - pos_global, source.size - source.pos); // interval should be in the same block
-        for (; len < max_len && source_data == row_source[pos_global + len].getData(); ++len);
+        size_t max_len = std::min(total_rows - pos_global, source.size - source.pos); // interval should be in the same block
+        while (len < max_len && !row_sources_buf.eof())
+        {
+            row_sources_buf.nextIfAtEnd();
+            if (source_data != *row_sources_buf.position())
+                break;
+
+            ++len;
+            ++row_sources_buf.position();
+        }
 
         if (!source_skip)
         {

@@ -39,6 +39,21 @@ inline void writeChar(char x, WriteBuffer & buf)
     ++buf.position();
 }
 
+inline void writeFill(char x, size_t n, WriteBuffer & buf)
+{
+    size_t bytes_filled = 0;
+
+    while (bytes_filled < n)
+    {
+        buf.nextIfAtEnd();
+        size_t bytes_to_fill = std::min(static_cast<size_t>(buf.buffer().end() - buf.position()), n - bytes_filled);
+        std::memset(buf.position(), x, bytes_to_fill);
+        buf.position() += bytes_to_fill;
+        bytes_filled += bytes_to_fill;
+    }
+}
+
+
 
 /// Write POD-type in native format. It's recommended to use only with packed (dense) data types.
 template <typename T>
