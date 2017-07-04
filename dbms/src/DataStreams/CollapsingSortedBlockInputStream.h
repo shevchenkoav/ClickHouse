@@ -79,12 +79,13 @@ private:
 
     size_t blocks_written = 0;
 
-    /// Fields specific for VERTICAL merge algorithm
-    size_t current_pos = 0;            /// Global row number of current key
-    size_t first_negative_pos = 0;    /// Global row number of first_negative
-    size_t last_positive_pos = 0;    /// Global row number of last_positive
-    size_t last_negative_pos = 0;    /// Global row number of last_negative
-    MergedRowSources * out_row_sources = nullptr; // TODO: remove dummy!
+    /// Fields specific for VERTICAL merge algorithm.
+    /// Row numbers are relative to the start of current output row.
+    size_t current_pos = 0;                        /// Current row number
+    size_t first_negative_pos = 0;                 /// Row number of first_negative
+    size_t last_positive_pos = 0;                  /// Row number of last_positive
+    size_t last_negative_pos = 0;                  /// Row number of last_negative
+    PODArray<RowSourcePart> current_row_sources;   /// Sources of rows with the current primary key
 
     /** We support two different cursors - with Collation and without.
      *  Templates are used instead of polymorphic SortCursors and calls to virtual functions.

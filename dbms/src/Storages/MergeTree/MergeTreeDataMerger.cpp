@@ -568,12 +568,12 @@ MergeTreeData::MutableDataPartPtr MergeTreeDataMerger::mergePartsToTemporaryPart
     {
         case MergeTreeData::MergingParams::Ordinary:
             merged_stream = std::make_unique<MergingSortedBlockInputStream>(
-                    src_streams, sort_desc, DEFAULT_MERGE_BLOCK_SIZE, 0, merged_rows_sources_buf.get(), true);
+                src_streams, sort_desc, DEFAULT_MERGE_BLOCK_SIZE, 0, merged_rows_sources_buf.get(), true);
             break;
 
         case MergeTreeData::MergingParams::Collapsing:
-            // merged_stream = std::make_unique<CollapsingSortedBlockInputStream>(
-            //         src_streams, sort_desc, data.merging_params.sign_column, DEFAULT_MERGE_BLOCK_SIZE, std::move(merged_rows_sources_buf));
+            merged_stream = std::make_unique<CollapsingSortedBlockInputStream>(
+                src_streams, sort_desc, data.merging_params.sign_column, DEFAULT_MERGE_BLOCK_SIZE, merged_rows_sources_buf.get());
             break;
 
         case MergeTreeData::MergingParams::Summing:
