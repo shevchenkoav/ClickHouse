@@ -18,6 +18,8 @@
 #include <DataStreams/MaterializingBlockInputStream.h>
 #include <DataStreams/ConcatBlockInputStream.h>
 #include <DataStreams/ColumnGathererStream.h>
+#include <IO/CompressedWriteBuffer.h>
+#include <IO/CompressedReadBufferFromFile.h>
 #include <DataTypes/DataTypeNested.h>
 #include <DataTypes/DataTypeArray.h>
 #include <Storages/MergeTree/BackgroundProcessingPool.h>
@@ -520,7 +522,8 @@ MergeTreeData::MutableDataPartPtr MergeTreeDataMerger::mergePartsToTemporaryPart
 
     LOG_DEBUG(log, "Selected MergeAlgorithm: " << ((merge_alg == MergeAlgorithm::Vertical) ? "Vertical" : "Horizontal"));
 
-    std::unique_ptr<WriteBuffer> merged_rows_sources_buf;
+    std::unique_ptr<WriteBuffer> rows_sources_file_buf;
+    std::unique_ptr<CompressedWriteBuffer> rows_sources_compressing_buf;
 
     if (merge_alg != MergeAlgorithm::Vertical)
     {
@@ -532,7 +535,8 @@ MergeTreeData::MutableDataPartPtr MergeTreeDataMerger::mergePartsToTemporaryPart
     else
     {
         Poco::File(new_part_tmp_path).createDirectories();
-        merged_rows_sources_buf = std::make_unique<WriteBufferFromFile>(new_part_tmp_path + "rows_sources", DBMS_DEFAULT_BUFFER_SIZE);
+        rows_sources_file_buf = std::make_unique<WriteBufferFromFile>(new_part_tmp_path + "rows_sources");
+        rows_sources_compressing_buf = std::make_unique<CompressedWriteBuffer>(*rows_sources_file_buf);
     }
 
     ColumnSizeEstimator column_sizes(merged_column_to_size, merging_column_names, gathering_column_names);
@@ -568,12 +572,12 @@ MergeTreeData::MutableDataPartPtr MergeTreeDataMerger::mergePartsToTemporaryPart
     {
         case MergeTreeData::MergingParams::Ordinary:
             merged_stream = std::make_unique<MergingSortedBlockInputStream>(
-                src_streams, sort_desc, DEFAULT_MERGE_BLOCK_SIZE, 0, merged_rows_sources_buf.get(), true);
+                src_streams, sort_desc, DEFAULT_MERGE_BLOCK_SIZE, 0, rows_sources_compressing_buf.get(), true);
             break;
 
         case MergeTreeData::MergingParams::Collapsing:
             merged_stream = std::make_unique<CollapsingSortedBlockInputStream>(
-                src_streams, sort_desc, data.merging_params.sign_column, DEFAULT_MERGE_BLOCK_SIZE, merged_rows_sources_buf.get());
+                src_streams, sort_desc, data.merging_params.sign_column, DEFAULT_MERGE_BLOCK_SIZE, rows_sources_compressing_buf.get());
             break;
 
         case MergeTreeData::MergingParams::Summing:
@@ -662,10 +666,11 @@ MergeTreeData::MutableDataPartPtr MergeTreeDataMerger::mergePartsToTemporaryPart
 
         auto it_name_and_type = gathering_columns.cbegin();
 
-        merged_rows_sources_buf->next();
-        size_t total_rows = merged_rows_sources_buf->count();
-        merged_rows_sources_buf.reset();
-        ReadBufferFromFile rows_sources_buf(new_data_part->getFullPath() + "rows_sources");
+        rows_sources_compressing_buf->next();
+        size_t total_rows = rows_sources_compressing_buf->getUncompressedBytes();
+        rows_sources_compressing_buf.reset();
+        rows_sources_file_buf.reset();
+        CompressedReadBufferFromFile rows_sources_buf(new_data_part->getFullPath() + "rows_sources", 0, 0);
 
         for (size_t column_num = 0, gathering_column_names_size = gathering_column_names.size();
             column_num < gathering_column_names_size;
@@ -690,7 +695,7 @@ MergeTreeData::MutableDataPartPtr MergeTreeDataMerger::mergePartsToTemporaryPart
                 column_part_streams[part_num] = std::move(column_part_stream);
             }
 
-            rows_sources_buf.seek(0);
+            rows_sources_buf.seek(0, 0);
             ColumnGathererStream column_gathered_stream(column_part_streams, column_name, total_rows, rows_sources_buf, DEFAULT_BLOCK_SIZE);
             MergedColumnOnlyOutputStream column_to(data, new_part_tmp_path, false, compression_method, offset_written);
             size_t column_elems_written = 0;
