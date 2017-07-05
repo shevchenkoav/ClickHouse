@@ -91,7 +91,7 @@ private:
     size_t total_rows;
     ReadBuffer & row_sources_buf;
 
-    /// Cache required fileds
+    /// Cache required fields
     struct Source
     {
         const IColumn * column;
@@ -116,8 +116,9 @@ private:
     void fetchNewBlock(Source & source, size_t source_num);
 
     std::vector<Source> sources;
+    Source * source_to_flush = nullptr;
 
-    size_t pos_global_start = 0;
+    size_t pos_global = 0;
     size_t block_preferred_size;
 
     Poco::Logger * log;

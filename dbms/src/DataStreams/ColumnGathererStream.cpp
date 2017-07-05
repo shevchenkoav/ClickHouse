@@ -84,16 +84,24 @@ Block ColumnGathererStream::readImpl()
     if (sources.empty())
         init();
 
-    if (pos_global_start >= total_rows)
+    if (pos_global >= total_rows)
         return Block();
 
     Block block_res{column.cloneEmpty()};
     IColumn & column_res = *block_res.getByPosition(0).column;
 
-    size_t curr_block_preferred_size = std::min(total_rows - pos_global_start,  block_preferred_size);
+    if (source_to_flush)
+    {
+        block_res.getByPosition(0).column = source_to_flush->block.getByName(name).column;
+        source_to_flush->pos = source_to_flush->size;
+        pos_global += source_to_flush->size;
+        source_to_flush = nullptr;
+        return block_res;
+    }
+
+    size_t curr_block_preferred_size = std::min(total_rows - pos_global,  block_preferred_size);
     column_res.reserve(curr_block_preferred_size);
 
-    size_t pos_global = pos_global_start;
     while (pos_global < total_rows && column_res.size() < curr_block_preferred_size)
     {
         RowSourcePart row_source;
@@ -113,7 +121,6 @@ Block ColumnGathererStream::readImpl()
         size_t max_len = std::min(total_rows - pos_global, source.size - source.pos); // interval should be in the same block
         while (len < max_len && !row_sources_buf.eof())
         {
-            row_sources_buf.nextIfAtEnd();
             if (source_data != *row_sources_buf.position())
                 break;
 
@@ -123,17 +130,20 @@ Block ColumnGathererStream::readImpl()
 
         if (!source_skip)
         {
-            /// Whole block could be produced via copying pointer from current block
+            // /// Whole block could be produced via copying pointer from current block
             if (source.pos == 0 && source.size == len)
             {
                 /// If current block already contains data, return it. We will be here again on next read() iteration.
                 if (column_res.size() != 0)
-                    break;
+                {
+                    source_to_flush = &source;
+                    return block_res;
+                }
 
                 block_res.getByPosition(0).column = source.block.getByName(name).column;
                 source.pos += len;
                 pos_global += len;
-                break;
+                return block_res;
             }
             else if (len == 1)
             {
@@ -148,7 +158,6 @@ Block ColumnGathererStream::readImpl()
         source.pos += len;
         pos_global += len;
     }
-    pos_global_start = pos_global;
 
     return block_res;
 }
