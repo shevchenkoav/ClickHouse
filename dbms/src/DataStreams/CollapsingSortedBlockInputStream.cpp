@@ -168,10 +168,6 @@ void CollapsingSortedBlockInputStream::merge(ColumnPlainPtrs & merged_columns, s
 
         queue.pop();
 
-        /// Initially, skip all rows. On insert, unskip "corner" rows.
-        if (out_row_sources_buf)
-            current_row_sources.emplace_back(current.impl->order, true);
-
         if (key_differs)
         {
             /// We write data for the previous primary key.
@@ -188,6 +184,10 @@ void CollapsingSortedBlockInputStream::merge(ColumnPlainPtrs & merged_columns, s
             last_negative_pos = 0;
             current_row_sources.resize(0);
         }
+
+        /// Initially, skip all rows. On insert, unskip "corner" rows.
+        if (out_row_sources_buf)
+            current_row_sources.emplace_back(current.impl->order, true);
 
         if (sign == 1)
         {

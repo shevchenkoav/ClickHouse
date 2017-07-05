@@ -768,8 +768,6 @@ MergeTreeDataMerger::MergeAlgorithm MergeTreeDataMerger::chooseMergeAlgorithm(
     if (data.context.getMergeTreeSettings().enable_vertical_merge_algorithm == 0)
         return MergeAlgorithm::Horizontal;
 
-    return MergeAlgorithm::Vertical; // TODO: remove
-
     bool is_supported_storage =
         data.merging_params.mode == MergeTreeData::MergingParams::Ordinary ||
         data.merging_params.mode == MergeTreeData::MergingParams::Collapsing;
